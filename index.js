@@ -4,19 +4,21 @@ const axios = require('axios');
 const crypto = require('crypto');
 
 const app = express();
-
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-app.get('/', (req, res) => {
+app.get('/', function(req, res) {
   res.json({ status: 'ok' });
 });
 
-app.post('/api/trades', async (req, res) => {
-  const { apiKey, apiSecret } = req.body;
+app.post('/api/trades', async function(req, res) {
+  const apiKey = req.body.apiKey;
+  const apiSecret = req.body.apiSecret;
+
   if (!apiKey || !apiSecret) {
     return res.status(400).json({ error: 'Нет ключей' });
   }
+
   try {
     const timestamp = Date.now().toString();
     const queryString = 'category=spot&limit=50';
@@ -35,9 +37,10 @@ app.post('/api/trades', async (req, res) => {
       }
     );
 
-    const trades = response.data.result?.list || [];
+    const trades = response.data.result ? response.data.result.list : [];
     const journal = processTrades(trades);
-    res.json({ success: true, journal });
+    res.json({ success: true, journal: journal });
+
   } catch (error) {
     console.error(error.message);
     res.status(500).json({ error: error.message });
@@ -46,50 +49,74 @@ app.post('/api/trades', async (req, res) => {
 
 function processTrades(trades) {
   const grouped = {};
-  trades.forEach(function(trade) {
-    if (!grouped[trade.symbol]) grouped[trade.symbol] = [];
+
+  for (let i = 0; i < trades.length; i++) {
+    const trade = trades[i];
+    if (!grouped[trade.symbol]) {
+      grouped[trade.symbol] = [];
+    }
     grouped[trade.symbol].push(trade);
-  });
+  }
 
   const result = [];
-  Object.keys(grouped).forEach(function(symbol) {
+  const symbols = Object.keys(grouped);
+
+  for (let i = 0; i < symbols.length; i++) {
+    const symbol = symbols[i];
     const tradeList = grouped[symbol];
-    const buys = tradeList.filter(function(t) { return t.side === 'Buy'; });
-    const sells = tradeList.filter(function(t) { return t.side === 'Sell'; });
 
-    const avgBuyPrice = buys.length
-      ? buys.reduce(function(s, t) { return s + parseFloat(t.execPrice); }, 0) / buys.length
-      : 0;
-    const avgSellPrice = sells.length
-      ? sells.reduce(function(s, t) { return s + parseFloat(t.execPrice); }, 0) / sells.length
-      : 0;
+    let buySum = 0;
+    let buyCount = 0;
+    let sellSum = 0;
+    let sellCount = 0;
+    let totalQty = 0;
+    let totalCommission = 0;
+    const times = [];
 
-    const totalQty = buys.reduce(function(s, t) { return s + parseFloat(t.execQty); }, 0);
-    const totalCommission = tradeList.reduce(function(s, t) { return s + parseFloat(t.execFee); }, 0);
-    const buyAmount = avgBuyPrice * totalQty;
-    const sellAmount = avgSellPrice * totalQty;
+    for (let j = 0; j < tradeList.length; j++) {
+      const t = tradeList[j];
+      times.push(parseInt(t.execTime));
+      totalCommission += parseFloat(t.execFee);
+
+      if (t.side === 'Buy') {
+        buySum += parseFloat(t.execPrice);
+        buyCount++;
+        totalQty += parseFloat(t.execQty);
+      } else {
+        sellSum += parseFloat(t.execPrice);
+        sellCount++;
+      }
+    }
+
+    const avgBuy = buyCount > 0 ? buySum / buyCount : 0;
+    const avgSell = sellCount > 0 ? sellSum / sellCount : 0;
+    const buyAmount = avgBuy * totalQty;
+    const sellAmount = avgSell * totalQty;
     const pnl = sellAmount - buyAmount - totalCommission;
-    const pnlPercent = buyAmount > 0 ? ((pnl / buyAmount) * 100).toFixed(2) : 0;
+    const pnlPercent = buyAmount > 0 ? ((pnl / buyAmount) * 100).toFixed(2) : '0';
 
-    const times = tradeList.map(function(t) { return parseInt(t.execTime); });
     const minTime = Math.min.apply(null, times);
     const maxTime = Math.max.apply(null, times);
     const durationMin = Math.round((maxTime - minTime) / 60000);
+    const duration = durationMin < 60
+      ? durationMin + ' мин'
+      : Math.round(durationMin / 60) + ' ч';
 
     result.push({
       symbol: symbol,
       entryTime: new Date(minTime).toLocaleString('ru-RU'),
       exitTime: new Date(maxTime).toLocaleString('ru-RU'),
-      duration: durationMin < 60 ? durationMin + ' мин' : Math.round(durationMin / 60) + ' ч',
+      duration: duration,
       quantity: totalQty.toFixed(4),
-      entryPrice: avgBuyPrice.toFixed(4),
-      exitPrice: avgSellPrice.toFixed(4),
+      entryPrice: avgBuy.toFixed(4),
+      exitPrice: avgSell.toFixed(4),
       amount: buyAmount.toFixed(2),
       commission: totalCommission.toFixed(4),
       pnl: pnl.toFixed(2),
       pnlPercent: pnlPercent
     });
-  });
+  }
+
   return result;
 }
 
@@ -97,3 +124,8 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
   console.log('Server running on port ' + PORT);
 });
+```
+
+Нажми **"Commit changes"** → подожди 2 минуты → проверь в браузере:
+```
+https://bybit-journal-server-production.up.railway.app/
